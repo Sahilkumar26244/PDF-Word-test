@@ -83,6 +83,26 @@
     }
     .sentence.match { color: #2e7d32; font-weight: bold; }
     .sentence.missing { color: #c62828; font-weight: bold; }
+    .debug-info {
+      font-size: 12px;
+      color: #666;
+      margin-top: 5px;
+      font-family: monospace;
+      word-break: break-all;
+    }
+    .similarity-score {
+      display: inline-block;
+      margin-left: 10px;
+      font-size: 0.8em;
+      color: #666;
+    }
+    .controls {
+      margin: 20px 0;
+      padding: 15px;
+      background: #fff;
+      border-radius: 6px;
+      border: 1px solid #ddd;
+    }
     @media (max-width: 768px) {
       .upload-section, .pdf-viewers { flex-direction: column; }
     }
@@ -100,6 +120,20 @@
       <div class="upload-box">
         <h3>📄 Upload Compare PDF</h3>
         <input type="file" id="comparePdf" accept="application/pdf" onchange="previewPDF(this, 'compareViewer')">
+      </div>
+    </section>
+
+    <section class="controls">
+      <h3>Comparison Settings</h3>
+      <div>
+        <label for="similarityThreshold">Similarity Threshold (%): </label>
+        <input type="range" id="similarityThreshold" min="50" max="100" value="80" step="1">
+        <span id="thresholdValue">80%</span>
+        <p>Higher threshold requires more exact matches. Lower values are more forgiving of small differences.</p>
+      </div>
+      <div>
+        <input type="checkbox" id="showDebugInfo">
+        <label for="showDebugInfo">Show Debug Information</label>
       </div>
     </section>
 
@@ -143,16 +177,49 @@ async function extractText(file) {
   return text;
 }
 
-// Cleaning the extracted text
+// Cleaning the extracted text more thoroughly
 function cleanText(text) {
   return text
-    .replace(/[\u00A0\u200B-\u200D\uFEFF]/g, ' ') // Remove invisible Unicode spaces
+    .replace(/[\u00A0\u2000-\u200F\uFEFF]/g, ' ') // Better handling of Unicode spaces and control chars
     .replace(/\s+/g, ' ')                        // Collapse multiple spaces
     .replace(/\s([.,!?:;)\]])/g, '$1')            // Remove space before punctuation
     .replace(/([(\[])\s/g, '$1')                  // Remove space after opening brackets
-    .replace(/[^\x20-\x7EáéíóúÁÉÍÓÚñÑüÜ]/g, '')   // Allow Spanish letters
     .trim()
     .toLowerCase();
+}
+
+// Normalize Spanish text with accents
+function normalizeText(text) {
+  return text
+    .normalize('NFD')                             // Decompose accented characters
+    .replace(/[\u0300-\u036f]/g, '')              // Remove accent marks
+    .replace(/[^\x20-\x7E]/g, '');                // Keep only basic ASCII
+}
+
+// Calculate similarity between two strings (Levenshtein distance)
+function calculateSimilarity(str1, str2) {
+  if (str1.length === 0) return str2.length === 0 ? 100 : 0;
+  if (str2.length === 0) return 0;
+  
+  const matrix = Array(str1.length + 1).fill().map(() => Array(str2.length + 1).fill(0));
+  
+  for (let i = 0; i <= str1.length; i++) matrix[i][0] = i;
+  for (let j = 0; j <= str2.length; j++) matrix[0][j] = j;
+  
+  for (let i = 1; i <= str1.length; i++) {
+    for (let j = 1; j <= str2.length; j++) {
+      const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,        // deletion
+        matrix[i][j - 1] + 1,        // insertion
+        matrix[i - 1][j - 1] + cost  // substitution
+      );
+    }
+  }
+  
+  const distance = matrix[str1.length][str2.length];
+  const maxLength = Math.max(str1.length, str2.length);
+  return maxLength > 0 ? Math.round((1 - distance / maxLength) * 100) : 100;
 }
 
 // Splitting into paragraphs
@@ -165,13 +232,43 @@ function splitIntoParagraphs(text) {
 
 // Splitting into sentences inside a paragraph
 function splitIntoSentences(paragraph) {
-  return paragraph.match(/[^.!?]+[.!?]*/g) || [paragraph]; 
+  // More robust sentence splitting, handling abbreviations and Spanish text
+  const result = paragraph.match(/[^.!?]+[.!?]+/g) || [paragraph];
+  return result.map(s => s.trim()).filter(s => s.length > 0);
+}
+
+// Find best match for a sentence in a set of sentences
+function findBestMatch(sentence, sentencesArray) {
+  const cleaned = cleanText(sentence);
+  const normalized = normalizeText(cleaned);
+  
+  let bestMatch = null;
+  let bestSimilarity = 0;
+  
+  for (const compareSentence of sentencesArray) {
+    const compareNormalized = normalizeText(cleanText(compareSentence));
+    const similarity = calculateSimilarity(normalized, compareNormalized);
+    
+    if (similarity > bestSimilarity) {
+      bestSimilarity = similarity;
+      bestMatch = {
+        original: compareSentence,
+        cleaned: cleanText(compareSentence),
+        normalized: compareNormalized,
+        similarity: similarity
+      };
+    }
+  }
+  
+  return { bestMatch, similarity: bestSimilarity };
 }
 
 // Main Compare Function
 async function compareDocuments() {
   const baseFile = document.getElementById('basePdf').files[0];
   const compareFile = document.getElementById('comparePdf').files[0];
+  const similarityThreshold = parseInt(document.getElementById('similarityThreshold').value);
+  const showDebug = document.getElementById('showDebugInfo').checked;
 
   if (!baseFile || !compareFile) {
     alert('Please upload both PDFs!');
@@ -182,11 +279,9 @@ async function compareDocuments() {
   const compareTextRaw = await extractText(compareFile);
 
   const baseParagraphs = splitIntoParagraphs(baseTextRaw);
-  const compareSentencesSet = new Set(
-    splitIntoParagraphs(compareTextRaw)
-      .flatMap(p => splitIntoSentences(p))
-      .map(sentence => cleanText(sentence))
-  );
+  const compareParagraphs = splitIntoParagraphs(compareTextRaw);
+  const compareSentences = compareParagraphs
+    .flatMap(p => splitIntoSentences(p));
 
   let resultHTML = '';
 
@@ -195,11 +290,26 @@ async function compareDocuments() {
     resultHTML += `<div class="paragraph">`;
 
     for (const sentence of sentences) {
-      const cleaned = cleanText(sentence);
-      if (compareSentencesSet.has(cleaned)) {
-        resultHTML += `<div class="sentence match">${sentence.trim()}</div>`;
+      if (sentence.trim().length === 0) continue;
+      
+      const { bestMatch, similarity } = findBestMatch(sentence, compareSentences);
+      
+      // Match if similarity is above threshold
+      if (similarity >= similarityThreshold) {
+        resultHTML += `<div class="sentence match">${sentence.trim()} <span class="similarity-score">(${similarity}%)</span></div>`;
       } else {
-        resultHTML += `<div class="sentence missing">${sentence.trim()}</div>`;
+        resultHTML += `<div class="sentence missing">${sentence.trim()} <span class="similarity-score">(${similarity}%)</span></div>`;
+      }
+      
+      // Add debug info if enabled
+      if (showDebug) {
+        resultHTML += `<div class="debug-info">
+          Original: "${sentence.trim()}"<br>
+          Cleaned: "${cleanText(sentence)}"<br>
+          Normalized: "${normalizeText(cleanText(sentence))}"<br>
+          Best Match: "${bestMatch ? bestMatch.original : 'None'}"<br>
+          Best Match Similarity: ${similarity}%
+        </div>`;
       }
     }
 
@@ -217,6 +327,11 @@ function previewPDF(input, viewerId) {
     document.getElementById(viewerId).src = fileURL;
   }
 }
+
+// Update threshold value display
+document.getElementById('similarityThreshold').addEventListener('input', function() {
+  document.getElementById('thresholdValue').textContent = this.value + '%';
+});
 </script>
 
 </body>
