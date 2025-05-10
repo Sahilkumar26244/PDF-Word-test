@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>PDF Comparator - Paragraph & Sentence Checker</title>
+  <title>PDF Document Structure Analyzer & Comparator</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -78,23 +78,51 @@
     .paragraph {
       margin-bottom: 20px;
       padding: 10px;
-      background: #f9f9f9;
       border-radius: 8px;
+    }
+    .heading {
+      background: #e3f2fd;
+      font-weight: bold;
+      font-size: 1.1em;
+      border-left: 4px solid #1976d2;
+    }
+    .salutation {
+      background: #e8f5e9;
+      border-left: 4px solid #43a047;
+    }
+    .body-content {
+      background: #fff9c4;
+      border-left: 4px solid #fbc02d;
+    }
+    .tokens {
+      background: #f3e5f5;
+      border-left: 4px solid #8e24aa;
+      font-family: monospace;
+    }
+    .footer {
+      background: #fce4ec;
+      border-left: 4px solid #e91e63;
+      font-size: 0.9em;
+    }
+    .cl-id {
+      background: #e0f2f1;
+      border-left: 4px solid #00897b;
+      font-family: monospace;
     }
     .sentence.match { color: #2e7d32; font-weight: bold; }
     .sentence.missing { color: #c62828; font-weight: bold; }
+    .similarity-score {
+      display: inline-block;
+      margin-left: 10px;
+      font-size: 0.8em;
+      color: #666;
+    }
     .debug-info {
       font-size: 12px;
       color: #666;
       margin-top: 5px;
       font-family: monospace;
       word-break: break-all;
-    }
-    .similarity-score {
-      display: inline-block;
-      margin-left: 10px;
-      font-size: 0.8em;
-      color: #666;
     }
     .controls {
       margin: 20px 0;
@@ -103,13 +131,31 @@
       border-radius: 6px;
       border: 1px solid #ddd;
     }
+    .document-section {
+      margin-bottom: 10px;
+      padding: 5px 10px;
+      border-radius: 4px;
+    }
+    .section-label {
+      display: inline-block;
+      padding: 2px 6px;
+      font-size: 0.75em;
+      border-radius: 4px;
+      margin-right: 8px;
+    }
+    .section-label.heading-label { background: #bbdefb; color: #1565c0; }
+    .section-label.salutation-label { background: #c8e6c9; color: #2e7d32; }
+    .section-label.body-label { background: #fff59d; color: #f57f17; }
+    .section-label.tokens-label { background: #e1bee7; color: #6a1b9a; }
+    .section-label.footer-label { background: #f8bbd0; color: #c2185b; }
+    .section-label.clid-label { background: #b2dfdb; color: #00695c; }
     @media (max-width: 768px) {
       .upload-section, .pdf-viewers { flex-direction: column; }
     }
   </style>
 </head>
 <body>
-  <header>📝 PDF Paragraph & Sentence Comparator</header>
+  <header>📑 PDF Document Structure Analyzer & Comparator</header>
 
   <main>
     <section class="upload-section">
@@ -154,7 +200,16 @@
 
     <section class="comparison-result" id="result">
       <h3>🔎 Comparison Results</h3>
-      <p>Upload and compare to view paragraph and sentence-level highlights.</p>
+      <div class="document-legend">
+        <h4>Document Structure Legend:</h4>
+        <span class="section-label heading-label">Heading</span>
+        <span class="section-label salutation-label">Salutation</span>
+        <span class="section-label body-label">Body</span>
+        <span class="section-label tokens-label">Tokens</span>
+        <span class="section-label footer-label">Footer</span>
+        <span class="section-label clid-label">CL ID</span>
+      </div>
+      <p>Upload and compare to view structured document analysis and comparison.</p>
     </section>
   </main>
 
@@ -194,6 +249,85 @@ function normalizeText(text) {
     .normalize('NFD')                             // Decompose accented characters
     .replace(/[\u0300-\u036f]/g, '')              // Remove accent marks
     .replace(/[^\x20-\x7E]/g, '');                // Keep only basic ASCII
+}
+
+// Document structure identification
+function identifyDocumentSection(text, index, totalParagraphs, allParagraphs) {
+  // Look for patterns to identify different sections
+  
+  // CL ID - Look for the specific format pattern with pipe character
+  if (text.match(/[A-Z]+-[A-Z]+-[A-Z0-9]+-[A-Z0-9]+-[0-9]+\s*\|\s*[A-Za-z]+\s+\d{4}/)) {
+    return "cl-id";
+  }
+  
+  // CL ID - Alternative format without pipe character
+  if (text.match(/[A-Z]+-[A-Z]+-[A-Z0-9]+-[A-Z0-9]+-[0-9]+/) && 
+      !text.includes("{{") && !text.includes("}}")) {
+    return "cl-id";
+  }
+  
+  // Heading pattern - usually first paragraphs with formatting like "Lorem ipsum..."
+  if (index === 0 && text.match(/^lorem ipsum/i)) {
+    return "heading";
+  }
+  
+  // Salutation pattern - look for "Estimado/a" and placeholder tokens
+  if (text.match(/^estimado\/a|^dear\s/i)) {
+    return "salutation";
+  }
+
+  // Check for token patterns
+  // Look for specific patterns like {{userId}}, {{User.Name}}, etc.
+  const hasUserIdToken = text.match(/\{\{userId\}\}/i) || text.match(/\{\{[Uu]ser[Ii]d\}\}/);
+  const hasUserNameToken = text.match(/\{\{User\.Name\}\}/i);
+  const hasUserPhoneToken = text.match(/\{\{User\.Phone\}\}/i);
+  const hasUserMailToken = text.match(/\{\{User\.Mail\}\}/i);
+  
+  // If the text is short and contains token placeholders, classify as tokens
+  if ((hasUserIdToken || hasUserNameToken || hasUserPhoneToken || hasUserMailToken) &&
+      text.length < 200) {
+    return "tokens";
+  }
+  
+  // Handle specific token sections with Tel and Mail labels
+  if ((text.includes("Tel") && hasUserPhoneToken) || 
+      (text.includes("Mail") && hasUserMailToken)) {
+    return "tokens";
+  }
+  
+  // Footer - typically begins with specific indicators
+  if (text.match(/^(random placeholder|this|about this email|the contents|©|how likely)/i)) {
+    return "footer";
+  }
+  
+  // Body content - everything else in the middle
+  return "body-content";
+}
+
+// Get CSS class for document section
+function getSectionClass(sectionType) {
+  const classMap = {
+    "heading": "heading",
+    "salutation": "salutation",
+    "body-content": "body-content",
+    "tokens": "tokens",
+    "footer": "footer",
+    "cl-id": "cl-id"
+  };
+  return classMap[sectionType] || "body-content";
+}
+
+// Get section label for document part
+function getSectionLabel(sectionType) {
+  const labelMap = {
+    "heading": '<span class="section-label heading-label">Heading</span>',
+    "salutation": '<span class="section-label salutation-label">Salutation</span>',
+    "body-content": '<span class="section-label body-label">Body</span>',
+    "tokens": '<span class="section-label tokens-label">Tokens</span>',
+    "footer": '<span class="section-label footer-label">Footer</span>',
+    "cl-id": '<span class="section-label clid-label">CL ID</span>'
+  };
+  return labelMap[sectionType] || '';
 }
 
 // Calculate similarity between two strings (Levenshtein distance)
@@ -283,12 +417,18 @@ async function compareDocuments() {
   const compareSentences = compareParagraphs
     .flatMap(p => splitIntoSentences(p));
 
-  let resultHTML = '';
+  let resultHTML = '<h3>🟢 Document Structure Analysis & Comparison</h3>';
 
-  for (const paragraph of baseParagraphs) {
+  for (let i = 0; i < baseParagraphs.length; i++) {
+    const paragraph = baseParagraphs[i];
+    const sectionType = identifyDocumentSection(paragraph, i, baseParagraphs.length, baseParagraphs);
+    const sectionClass = getSectionClass(sectionType);
+    const sectionLabel = getSectionLabel(sectionType);
+    
+    resultHTML += `<div class="paragraph ${sectionClass}">
+                   ${sectionLabel}<strong>Paragraph ${i+1}:</strong><br>`;
+
     const sentences = splitIntoSentences(paragraph);
-    resultHTML += `<div class="paragraph">`;
-
     for (const sentence of sentences) {
       if (sentence.trim().length === 0) continue;
       
@@ -307,6 +447,7 @@ async function compareDocuments() {
           Original: "${sentence.trim()}"<br>
           Cleaned: "${cleanText(sentence)}"<br>
           Normalized: "${normalizeText(cleanText(sentence))}"<br>
+          Section Type: "${sectionType}"<br>
           Best Match: "${bestMatch ? bestMatch.original : 'None'}"<br>
           Best Match Similarity: ${similarity}%
         </div>`;
@@ -316,10 +457,10 @@ async function compareDocuments() {
     resultHTML += `</div>`;
   }
 
-  document.getElementById('result').innerHTML = `<h3>🟢 Paragraph and Sentence Match Result</h3>` + resultHTML;
+  document.getElementById('result').innerHTML = resultHTML;
 }
 
-// PDF Preview
+  // PDF Preview
 function previewPDF(input, viewerId) {
   const file = input.files[0];
   if (file && file.type === 'application/pdf') {
